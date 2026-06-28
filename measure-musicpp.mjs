@@ -8,7 +8,7 @@ import { chromium } from "playwright";
 const ROOT = join(process.cwd(), "dist");
 const IMG = "testdata/日光之下/日光之下简谱.jpg";
 const GT = "testdata/日光之下/日光之下.jpwabc";
-const MIME = { ".html": "text/html", ".js": "text/javascript", ".css": "text/css", ".json": "application/json", ".woff2": "font/woff2", ".svg": "image/svg+xml", ".wasm": "application/wasm" };
+const MIME = { ".html": "text/html", ".js": "text/javascript", ".mjs": "text/javascript", ".css": "text/css", ".json": "application/json", ".woff2": "font/woff2", ".svg": "image/svg+xml", ".wasm": "application/wasm" };
 
 function decodeJpwabc(buf) {
   if (buf[0] === 0xff && buf[1] === 0xfe) return Buffer.from(buf.slice(2)).toString("utf16le");
@@ -65,7 +65,7 @@ const rec = await page.evaluate(async ({ b64 }) => {
   const omr = await window.__omr;
   const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
   const bin = await omr.decodeToBinary(bytes, "image/jpeg");
-  const score = await omr.recognizeJianpu(bin, omr.localOcrBackend());
+  const score = await omr.recognizeJianpu(bin, omr.paddleOcrBackend());
   const stats = { rows: score.rows.length, notes: score.rows.reduce((a, r) => a + r.nums.length, 0), bars: score.rows.reduce((a, r) => a + r.barlineXs.length, 0) };
   const xml = omr.toMusicXml(score);
   window.__app.importBytes(new TextEncoder().encode(xml), "omr.musicxml");
