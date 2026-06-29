@@ -58,6 +58,65 @@ const acc = (g, r) => 1 - lev(g, r) / Math.max(g.length, r.length, 1);
 const dOnly = (t) => t.map((x) => (x === "|" || x === "-" ? x : x.replace(/o.*$/, "")));
 // 去掉下划线/附点(留八度) → "数字+八度+小节线"
 const dOct = (t) => t.map((x) => (x === "|" || x === "-" ? x : x.replace(/u\d+\.?$/, "")));
+// 字符级准确率（去空白后逐字 Levenshtein）；两边都空 → 1，仅一边空 → 0
+const charAcc = (g, r) => {
+  const ga = [...g.replace(/\s/g, "")], ra = [...r.replace(/\s/g, "")];
+  if (!ga.length && !ra.length) return 1;
+  return 1 - lev(ga, ra) / Math.max(ga.length, ra.length, 1);
+};
+
+// ---- 圆滑线/连音线：.Voice 里 slur 与 tie 都渲染成 ( )。抽出有序括号序列(剔除 $(..)换行标记与
+// {..}三连音/记号)，按序列 Levenshtein 比，并报组数(左括号数)。 ----
+function brackets(text) {
+  const seq = []; let inV = false;
+  for (const ln of text.split(/\r?\n/)) {
+    const t = ln.trim();
+    if (t.startsWith(".")) { inV = /^\.voice/i.test(t); continue; }
+    if (!inV || !t) continue;
+    const s = ln.replace(/\$\([^)]*\)/g, "").replace(/\{[^}]*\}/g, "");
+    for (const ch of s) if (ch === "(" || ch === ")") seq.push(ch);
+  }
+  return seq;
+}
+const slurGroups = (seq) => seq.filter((c) => c === "(").length;
+
+// ---- 标题：.Title 段 `Title = {…}` 或 `Title = …`（识别端无花括号），取值去花括号 ----
+function titleOf(text) {
+  // 注意：`=` 后只吃同行空白([ \t]*)，不能用 \s*（会跨行吞掉下一行内容）
+  const m = text.match(/^[ \t]*Title[ \t]*=[ \t]*(.*)$/m);
+  return m ? m[1].trim().replace(/^\{|\}$/g, "").trim() : "";
+}
+// ---- 词曲：`WordsByAndMusicBy = …`，多作者用字面 \n 连接，归一成字符串比 ----
+function creditsOf(text) {
+  const m = text.match(/WordsByAndMusicBy[ \t]*=[ \t]*(.*)/);
+  return m ? m[1].trim().replace(/\\n/g, " ") : "";
+}
+// ---- 歌词：.Words 段按 W<verse> 头分组，收正文(剔 / 分隔)，逐 verse 比，按 GT 字数加权平均 ----
+function lyricsOf(text) {
+  const verses = new Map(); let inW = false, cur = null;
+  for (const ln of text.split(/\r?\n/)) {
+    const t = ln.trim();
+    if (t.startsWith(".")) { inW = /^\.words/i.test(t); continue; }
+    if (!inW) continue;
+    const h = t.match(/^W(\d+)/);
+    if (h) { cur = h[1]; if (!verses.has(cur)) verses.set(cur, ""); continue; }
+    if (cur == null) continue;
+    verses.set(cur, verses.get(cur) + t.replace(/\//g, ""));
+  }
+  return verses;
+}
+function lyricsAcc(gt, rec) {
+  const g = lyricsOf(gt), r = lyricsOf(rec);
+  if (!g.size && !r.size) return { acc: 1, detail: "无" };
+  let totW = 0, sum = 0; const parts = [];
+  for (const [v, gtxt] of g) {
+    const a = charAcc(gtxt, r.get(v) ?? "");
+    const w = [...gtxt.replace(/\s/g, "")].length || 1;
+    totW += w; sum += a * w;
+    parts.push(`W${v} ${(a * 100).toFixed(0)}%`);
+  }
+  return { acc: totW ? sum / totW : (r.size ? 0 : 1), detail: parts.join("/") || "无" };
+}
 
 async function findSongs() {
   const out = [];
@@ -94,7 +153,7 @@ const songs = await findSongs();
 if (!songs.length) { console.log("testdata/ 下没找到 图片+jpwabc 的歌谱文件夹"); await browser.close(); server.close(); process.exit(0); }
 
 const rows = [];
-let sumA = 0, sumD = 0, sumO = 0;
+const sum = { a: 0, o: 0, d: 0, s: 0, ly: 0, ti: 0, cr: 0 };
 for (const song of songs) {
   errors.length = 0;
   const mime = MIME[extname(song.img).toLowerCase()] ?? "image/jpeg";
@@ -112,29 +171,41 @@ for (const song of songs) {
     }, { b64, mime });
   } catch (e) {
     console.log(`✗ ${song.name}: 识别异常 ${String(e).slice(0, 120)}`);
-    rows.push({ name: song.name, a: 0, d: 0, o: 0, g: 0, r: 0, stats: {} });
+    rows.push({ name: song.name, fail: true });
     continue;
   }
-  const g = voiceTokens(decodeJpwabc(await readFile(song.gt)));
-  const r = voiceTokens(rec.jpw);
+  const gt = decodeJpwabc(await readFile(song.gt)), rj = rec.jpw;
+  const g = voiceTokens(gt), r = voiceTokens(rj);
   const a = acc(g, r), d = acc(dOnly(g), dOnly(r)), o = acc(dOct(g), dOct(r));
-  sumA += a; sumD += d; sumO += o;
-  rows.push({ name: song.name, a, d, o, g: g.length, r: r.length, stats: rec.stats, err: errors.filter((e) => !/favicon|space too large/.test(e)).slice(0, 2) });
+  const gB = brackets(gt), rB = brackets(rj);
+  const s = acc(gB, rB);
+  const ly = lyricsAcc(gt, rj);
+  const ti = charAcc(titleOf(gt), titleOf(rj));
+  const cr = charAcc(creditsOf(gt), creditsOf(rj));
+  sum.a += a; sum.o += o; sum.d += d; sum.s += s; sum.ly += ly.acc; sum.ti += ti; sum.cr += cr;
+  rows.push({ name: song.name, a, o, d, s, sg: slurGroups(gB), sr: slurGroups(rB),
+    ly: ly.acc, lyD: ly.detail, ti, cr, g: g.length, r: r.length, stats: rec.stats,
+    err: errors.filter((e) => !/favicon|space too large/.test(e)).slice(0, 2) });
 }
 
-const pct = (x) => (x * 100).toFixed(1).padStart(5) + "%";
-console.log("\n歌谱".padEnd(20) + "  完整   数字+八度  数字+小节   GT/识别   结构(行/音/线)");
-console.log("─".repeat(86));
+const pct = (x) => (x * 100).toFixed(1).padStart(6) + "%";
+const C = "  ";
+console.log("\n" + "歌谱".padEnd(18) + C + " 音符" + C + " 八度" + C + " 小节" + C + "slur/tie" + C + " 歌词" + C + " 标题" + C + " 词曲" + C + " GT/识");
+console.log("─".repeat(104));
 for (const x of rows) {
+  if (x.fail) { console.log(x.name.padEnd(18) + C + "  识别异常"); continue; }
   console.log(
-    x.name.padEnd(20) + "  " + pct(x.a) + "   " + pct(x.o) + "    " + pct(x.d) +
-    "   " + `${x.g}/${x.r}`.padStart(8) + "   " +
-    (x.stats.rows !== undefined ? `${x.stats.rows}/${x.stats.notes}/${x.stats.bars}` : "-"));
-  if (x.err?.length) console.log("    ⚠ " + x.err.join(" | ").slice(0, 100));
+    x.name.padEnd(18) + C + pct(x.a) + C + pct(x.o) + C + pct(x.d) + C +
+    (pct(x.s) + `(${x.sg}/${x.sr})`).padEnd(8) + C + pct(x.ly) + C + pct(x.ti) + C + pct(x.cr) + C +
+    `${x.g}/${x.r}`);
+  console.log("    ".padEnd(20) + `结构 行${x.stats.rows}/音${x.stats.notes}/线${x.stats.bars}  歌词[${x.lyD}]` +
+    (x.err?.length ? "  ⚠ " + x.err.join(" | ").slice(0, 60) : ""));
 }
-console.log("─".repeat(86));
-const n = rows.length;
-console.log("平均".padEnd(20) + "  " + pct(sumA / n) + "   " + pct(sumO / n) + "    " + pct(sumD / n) + `   (${n} 首)`);
+console.log("─".repeat(104));
+const n = rows.filter((x) => !x.fail).length || 1;
+console.log("平均".padEnd(18) + C + pct(sum.a / n) + C + pct(sum.o / n) + C + pct(sum.d / n) + C +
+  pct(sum.s / n).padEnd(8) + C + pct(sum.ly / n) + C + pct(sum.ti / n) + C + pct(sum.cr / n) + `   (${n} 首)`);
+console.log("\nslur/tie 列括号内为 (GT 组数/识别组数)；歌词为各 verse 字符准确率加权平均；标题/词曲为字符准确率。");
 
 await browser.close();
 server.close();
