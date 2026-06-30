@@ -58,6 +58,9 @@ const acc = (g, r) => 1 - lev(g, r) / Math.max(g.length, r.length, 1);
 const dOnly = (t) => t.map((x) => (x === "|" || x === "-" ? x : x.replace(/o.*$/, "")));
 // 去掉下划线/附点(留八度) → "数字+八度+小节线"
 const dOct = (t) => t.map((x) => (x === "|" || x === "-" ? x : x.replace(/u\d+\.?$/, "")));
+// 仅附点：每音符化简为有无附点(N./N)，留小节线/增时线作对齐锚 → 量附点识别准确率
+const dotFlag = (t) => t.map((x) => (x === "|" || x === "-" ? x : (/\.$/.test(x) ? "N." : "N")));
+const dotCount = (t) => t.filter((x) => /^N.*\.$/.test(x)).length;
 // 字符级准确率（去空白后逐字 Levenshtein）；两边都空 → 1，仅一边空 → 0
 const charAcc = (g, r) => {
   const ga = [...g.replace(/\s/g, "")], ra = [...r.replace(/\s/g, "")];
@@ -173,7 +176,7 @@ const songs = await findSongs();
 if (!songs.length) { console.log("testdata/ 下没找到 图片+jpwabc 的歌谱文件夹"); await browser.close(); server.close(); process.exit(0); }
 
 const rows = [];
-const sum = { a: 0, o: 0, d: 0, s: 0, ly: 0, lyNp: 0, ti: 0, cr: 0 };
+const sum = { a: 0, o: 0, d: 0, dc: 0, s: 0, ly: 0, lyNp: 0, ti: 0, cr: 0 };
 for (const song of songs) {
   errors.length = 0;
   const mime = MIME[extname(song.img).toLowerCase()] ?? "image/jpeg";
@@ -197,14 +200,15 @@ for (const song of songs) {
   const gt = decodeJpwabc(await readFile(song.gt)), rj = rec.jpw;
   const g = voiceTokens(gt), r = voiceTokens(rj);
   const a = acc(g, r), d = acc(dOnly(g), dOnly(r)), o = acc(dOct(g), dOct(r));
+  const dc = acc(dotFlag(g), dotFlag(r));
   const gB = brackets(gt), rB = brackets(rj);
   const s = acc(gB, rB);
   const ly = lyricsAcc(gt, rj);
   const lyNp = lyricsAcc(gt, rj, true);
   const ti = charAcc(titleOf(gt), titleOf(rj));
   const cr = charAcc(creditsOf(gt), creditsOf(rj));
-  sum.a += a; sum.o += o; sum.d += d; sum.s += s; sum.ly += ly.acc; sum.lyNp += lyNp.acc; sum.ti += ti; sum.cr += cr;
-  rows.push({ name: song.name, a, o, d, s, sg: slurGroups(gB), sr: slurGroups(rB),
+  sum.a += a; sum.o += o; sum.d += d; sum.dc += dc; sum.s += s; sum.ly += ly.acc; sum.lyNp += lyNp.acc; sum.ti += ti; sum.cr += cr;
+  rows.push({ name: song.name, a, o, d, dc, gdot: dotCount(g), rdot: dotCount(r), s, sg: slurGroups(gB), sr: slurGroups(rB),
     ly: ly.acc, lyNp: lyNp.acc, lyD: ly.detail, ti, cr, g: g.length, r: r.length, stats: rec.stats,
     err: errors.filter((e) => !/favicon|space too large/.test(e)).slice(0, 2) });
 }
@@ -212,19 +216,19 @@ for (const song of songs) {
 // CSV 输出：百分比保留 1 位小数（不带 % 号），字段含逗号则加引号
 const p1 = (x) => (x * 100).toFixed(1);
 const csv = (v) => { const s = String(v); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
-const cols = ["歌谱", "音符", "八度", "小节", "slur/tie", "slur组GT", "slur组识", "歌词", "歌词*", "标题", "词曲", "GT_token", "识_token", "行", "音", "线"];
+const cols = ["歌谱", "音符", "八度", "附点", "附GT", "附识", "小节", "slur/tie", "slur组GT", "slur组识", "歌词", "歌词*", "标题", "词曲", "GT_token", "识_token", "行", "音", "线"];
 const lines = [cols.join(",")];
 for (const x of rows) {
   if (x.fail) { lines.push([csv(x.name), "识别异常"].join(",")); continue; }
   lines.push([
-    csv(x.name), p1(x.a), p1(x.o), p1(x.d), p1(x.s), x.sg, x.sr,
+    csv(x.name), p1(x.a), p1(x.o), p1(x.dc), x.gdot, x.rdot, p1(x.d), p1(x.s), x.sg, x.sr,
     p1(x.ly), p1(x.lyNp), p1(x.ti), p1(x.cr), x.g, x.r,
     x.stats.rows, x.stats.notes, x.stats.bars,
   ].join(","));
 }
 const n = rows.filter((x) => !x.fail).length || 1;
 lines.push([
-  "平均", p1(sum.a / n), p1(sum.o / n), p1(sum.d / n), p1(sum.s / n), "", "",
+  "平均", p1(sum.a / n), p1(sum.o / n), p1(sum.dc / n), "", "", p1(sum.d / n), p1(sum.s / n), "", "",
   p1(sum.ly / n), p1(sum.lyNp / n), p1(sum.ti / n), p1(sum.cr / n), "", "", "", "", "",
 ].join(","));
 
