@@ -107,13 +107,29 @@ function lyricsOf(text) {
 }
 // 中文/英文标点 + jpwabc 记号花括号；忽略标点比对时剔除
 const stripPunct = (s) => s.replace(/[，。；：？！、,.;:?!{}]/g, "");
+// ---- 反复(D.S. al Fine / 段落反复)写全的歌词：GT 把反复段照唱词抄了一遍，但图上只印一次，
+// OMR 只读印刷一遍 → 不公平。规则：剔掉「整段又在前文连续出现过」的最长后缀(=照抄的反复段)，
+// 循环直到稳定。对 GT/识别两侧对称施加(识别侧通常无反复后缀→空操作)；要求后缀够长(≥minLen)以免
+// 误剔结尾正巧与前文重复的单个短句。三连「好像水充满洋海一般」是连印实唱、两侧都有→对称不受影响。----
+function trimRepeatedSuffix(s, minLen = 8) {
+  let cur = s;
+  for (;;) {
+    const n = cur.length; let cut = 0;
+    for (let L = Math.floor(n / 2); L >= minLen; L--) {
+      if (cur.slice(0, n - L).includes(cur.slice(n - L))) { cut = L; break; } // 最长(高→低先命中)
+    }
+    if (!cut) return cur;
+    cur = cur.slice(0, n - cut);
+  }
+}
 function lyricsAcc(gt, rec, ignorePunct = false) {
   const g = lyricsOf(gt), r = lyricsOf(rec);
   if (!g.size && !r.size) return { acc: 1, detail: "无" };
   let totW = 0, sum = 0; const parts = [];
-  for (const [v, gtxt0] of g) {
+  for (const [v, gtxt00] of g) {
+    const gtxt0 = trimRepeatedSuffix(gtxt00), rtxt0 = trimRepeatedSuffix(r.get(v) ?? "");
     const gtxt = ignorePunct ? stripPunct(gtxt0) : gtxt0;
-    const rtxt = ignorePunct ? stripPunct(r.get(v) ?? "") : (r.get(v) ?? "");
+    const rtxt = ignorePunct ? stripPunct(rtxt0) : rtxt0;
     const a = charAcc(gtxt, rtxt);
     const w = [...gtxt.replace(/\s/g, "")].length || 1;
     totW += w; sum += a * w;
