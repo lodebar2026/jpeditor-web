@@ -73,9 +73,14 @@ const data = await page.evaluate(async ({ b64 }) => {
   });
   function scaled_from(im, tw) { if (im.w <= tw) return im.url; return { url: im.url, w: im.w }; } // 交给 CSS 缩放
 
-  // OCR 切块条（原分辨率裁剪）+ rec 结果
+  // OCR 切块条：**实际送识别的压缩条**（buildStrip 把过宽字距压到 maxGap）+ rec 结果。
+  // 注意不能再裁 ck.crop（那是自然包围盒、含大空白）——那会与真正喂 OCR 的条子不一致。
   out.chunks = (T.chunks || []).map((ck, s) => {
-    const im = cropOv(binCv, ck.crop, []);
+    const strip = omr.buildStrip(binCv, ck.cells, 48, ck.maxGap); // 与管线同参数
+    const im = { url: strip.convertToBlob ? null : null, w: strip.width, h: strip.height };
+    // OffscreenCanvas → dataURL（经临时 canvas）
+    const tmp = document.createElement("canvas"); tmp.width = strip.width; tmp.height = strip.height;
+    tmp.getContext("2d").drawImage(strip, 0, 0); im.url = tmp.toDataURL("image/png");
     const rec = (T.recPerChunk && T.recPerChunk[s]) || [];
     return { rowIdx: ck.rowIdx, verse: ck.verse, img: im.url, w: im.w, h: im.h,
       rec: rec.map((r) => r.ch).join(""), chars: rec.map((r) => ({ ch: r.ch, xFrac: +r.xFrac.toFixed(3) })) };
@@ -146,8 +151,10 @@ for (const row of data.rows) {
    ${row.verses.map((v) => `<tr><td>W${v.verse + 1}</td><td>${v.cov}</td><td>${v.ncells}</td></tr>`).join("")}</table>`;
 }
 
-html += `<h2>Step 3 · 切块 → 裁自然连续区域 → 整块 OCR</h2>
-<p>字块先在<b>长空白边界</b>（多在标点后）断成段，各段再按宽度切成 ≤300px（≈5 字）块；每块裁源图上那段<b>自然连续区域</b>（保留原字间距、不重拼），缩到高 48px 送 PaddleOCR。下面是<b>实际送识别的每个条子</b>及其 rec 输出：</p>
+html += `<h2>Step 3 · 均匀切块 → 压缩过宽字距 → 整块 OCR</h2>
+<p>整行字格按宽度<b>均匀</b>切成 ≤300px（≈5 字）的块（末块不落单字）；每块把字形按原序拼成一条，
+但<b>字间过宽的空白压到 ≈0.35 字宽</b>（去纯空白、不重拼、不动字形），缩到高 48px 送 PaddleOCR——
+散字因此能并进同一条整体识别（多字上下文远比逐字准）。下面是<b>实际送识别的每个压缩条</b>及其 rec 输出：</p>
 <div>`;
 let curRV = "";
 for (const ck of data.chunks) {
