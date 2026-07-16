@@ -72,9 +72,9 @@ for (const song of songs) {
       const score = await omr.recognizeJianpu(bin, omr.paddleOcrBackend());
       window.__app.importBytes(new TextEncoder().encode(omr.toMusicXml(score)), "omr.musicxml");
       const orig = window.__app.getText();
-      window.__app.togglePhrase();
+      window.__app.setPhraseLayout(true);
       const phrase = window.__app.getText();
-      window.__app.togglePhrase();
+      window.__app.setPhraseLayout(false);
       return { jpw: orig, phrase, rows: score.rows.length };
     }, { b64, mime });
   } catch (e) { console.log(`✗ ${song.name}: ${String(e).slice(0, 100)}`); continue; }

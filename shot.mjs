@@ -34,6 +34,12 @@ const errors = [];
 page.on("console", (m) => { if (m.type() === "error") errors.push(m.text()); });
 page.on("pageerror", (e) => errors.push("pageerror: " + e.message));
 await page.goto(`http://localhost:${port}/`, { waitUntil: "networkidle" });
+// 新 UI 启动进开始页（#start-screen 覆盖层），揭开工作区以便截到谱面。
+await page.evaluate(() => {
+  document.getElementById("app")?.classList.remove("is-starting");
+  const ss = document.getElementById("start-screen");
+  if (ss) ss.hidden = true;
+});
 await page.waitForTimeout(700);
 
 // --xml mode: render MusicXML via MixedPainter

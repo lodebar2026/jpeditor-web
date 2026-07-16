@@ -39,6 +39,10 @@ await page.waitForTimeout(700);
 const result = await page.evaluate(async (bytes) => {
   const app = window.__app;
   await app.recognizeBytes("musicpp", { bytes: new Uint8Array(bytes), mime: "image/jpeg", path: null });
+  // 新 UI 直调 recognizeBytes 不会揭开开始页覆盖层，这里手动揭开以便截到核对视图。
+  document.getElementById("app")?.classList.remove("is-starting");
+  const ss = document.getElementById("start-screen");
+  if (ss) ss.hidden = true;
   const pane = document.getElementById("score-pane");
   const svg = pane.querySelector("svg.omr-recognize");
   return {
